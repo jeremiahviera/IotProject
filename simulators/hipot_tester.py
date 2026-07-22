@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 """
 hipot_tester.py
 
@@ -74,9 +72,9 @@ class HiPotTester(Machine):
     def __init__(
         self,
         station_id: str,
-        rated_test_voltage_v: float = 15000.0,
-        leakage_threshold_ma: float = 5.0,
-        base_dwell_time_s: float = 60.0,
+        rated_test_voltage_v: float = 2200.0,
+        leakage_threshold_ma: float = 2.0,
+        base_dwell_time_s: float = 2.0,
         base_ramp_time_s: float = 8.0,
         on_test_result: Optional[Callable[[TestResult], None]] = None,
         on_health_reading: Optional[Callable] = None,
@@ -135,9 +133,9 @@ class HiPotTester(Machine):
         # Baseline chance of a genuine product defect, independent of
         # tester health -- this is what the test exists to catch.
         if random.random() < 0.03:
-            leakage += random.uniform(4.0, 10.0)
+            leakage += random.uniform(1.5, 3.5)
 
-        voltage_actual = self.rated_test_voltage_v * random.uniform(0.995, 1.0)
+        voltage_actual = self.rated_test_voltage_v * random.uniform(0.96, 1.0)
 
         result_status = TestResultStatus.PASS
         fail_reason = None
@@ -183,7 +181,7 @@ if __name__ == "__main__":
     )
 
     for i in range(5):
-        tester.run_test_cycle(unit_serial=f"SG-2026-{1000+i}", job_order_id="JOB-4471")
+        tester.run_test_cycle(unit_serial=f"SWB-2026-{1000+i}", job_order_id="JOB-4471")
         if i % 2 == 0:
             tester.sample_health()
 
