@@ -55,7 +55,8 @@ def build_context() -> ModbusServerContext:
     input_registers = ModbusSequentialDataBlock(0, [0] * 10)
     holding_registers = ModbusSequentialDataBlock(0, [0] * 20)
 
-    # --- Dummy values, just to prove read plumbing works end to end ---
+    # Enable remote
+    #coils.setValues(4,1)
 
     # Discrete Inputs: pretend last test passed, device idle, interlock OK
     discrete_inputs.setValues(1, [1, 0, 0, 1, 0, 0, 1])  # addrs 10001-10007
@@ -94,17 +95,47 @@ def build_context() -> ModbusServerContext:
     return server_context, coils, discrete_inputs, input_registers, holding_registers
 
 def coil_watcher(coils: ModbusSequentialDataBlock):
-    coils.setValues(1,1)
     while True:
         with lock: 
-        ##Capture coil values with lock so threads do not touch data at same time        
+            ##Capture coil values with lock so threads do not touch data at same time        
             start_test = coils.getValues(1,1)[0]
             stop_test = coils.getValues(2,1)[0]
             reset_fault = coils.getValues(3,1)[0]
             remote_enable = coils.getValues(4,1)[0]
             offset_calibration = coils.getValues(5,1)[0]
-            print(start_test)
-        time.sleep(polling_period) ##200ms polling period
+            ##capture testing state
+            State = "idle" ## Change this later to get actual test state.
+            if remote_enable: ##If remote modbus control is enabled. Should be, for sim purposes
+                match State:
+                    case "idle":
+                        if start_test:
+                            print("INFO: HIPOT SIM - Test starting")
+                            #start test behavior
+                        elif offset_calibration:
+                            print("INFO: HIPOT SIM - Offset Calibration starting")
+                            #Start calibration behavior
+                    case "running":
+                        if stop_test:
+                            print("INFO: HIPOT SIM - Aborting test")
+                            #Stop test behavior
+                    case "fault_latched":
+                        if reset_fault:
+                            print("Fault reset")
+                        else:
+                            print("ERROR: HIPOT SIM - Fault not clear, no action taken")
+                    case "calibrating":
+                        print("INFO: HIPOT SIM - Calibrating")
+                        ## when finished set back to idle
+                    case _:
+                        print("ERROR: HIPOT SIM - System behavior unknown")
+            
+            else:  
+                print("WARNING: HIPOT SIM - Remote Control permission denied")  
+                
+            #reset coil values
+            coils.setValues(1, [0, 0, 0])   # clears 1-3: Start Test, Stop, Reset Fault
+            coils.setValues(5, [0]) 
+        time.sleep(polling_period) #the period the function polls
     
         
 
@@ -112,7 +143,7 @@ def coil_watcher(coils: ModbusSequentialDataBlock):
 async def main():
     context, coils, discrete_inputs, input_registers, holding_registers  = build_context()
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
-    watcher_thread = threading.Thread(target=coil_watcher(coils), daemon=True)
+    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, ), daemon=True)
     watcher_thread.start()  
     await StartAsyncTcpServer(context=context, address=(HOST, PORT))
     
