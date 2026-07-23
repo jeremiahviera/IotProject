@@ -14,13 +14,14 @@ confirm the values below come back correctly.
 import asyncio
 import threading
 import time
-
+import struct
 from pymodbus.datastore import (
     ModbusSequentialDataBlock,
     ModbusSlaveContext,
     ModbusServerContext,
 )
 from pymodbus.server import StartAsyncTcpServer
+from simulators.hipot_tester import HiPotTester
 
 # NOTE: pinned to pymodbus==3.7.4 (see requirements). pymodbus 3.14 rewrote
 # the datastore internals (ModbusSlaveContext -> ModbusDeviceContext,
@@ -94,6 +95,12 @@ def build_context() -> ModbusServerContext:
     server_context = ModbusServerContext(slaves={SLAVE_ID: slave_context}, single=False)
     return server_context, coils, discrete_inputs, input_registers, holding_registers
 
+def run_test(tester, input_registers, discrete_inputs):
+    def on_progress(elapsed_time: float, live_voltage: float):
+        with lock:
+            hi, lo = struct.unpack('>HH', struct.pack('>f', live_voltage))
+        
+
 def coil_watcher(coils: ModbusSequentialDataBlock):
     while True:
         with lock: 
@@ -110,6 +117,7 @@ def coil_watcher(coils: ModbusSequentialDataBlock):
                     case "idle":
                         if start_test:
                             print("INFO: HIPOT SIM - Test starting")
+                            
                             #start test behavior
                         elif offset_calibration:
                             print("INFO: HIPOT SIM - Offset Calibration starting")
@@ -142,8 +150,10 @@ def coil_watcher(coils: ModbusSequentialDataBlock):
 
 async def main():
     context, coils, discrete_inputs, input_registers, holding_registers  = build_context()
+    tester = HiPotTester(station_id="HIPOT-01")   # created ONCE, lives for the server's lifetime
+
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
-    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, ), daemon=True)
+    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, discrete_inputs, input_registers, tester), daemon=True)
     watcher_thread.start()  
     await StartAsyncTcpServer(context=context, address=(HOST, PORT))
     

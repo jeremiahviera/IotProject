@@ -21,6 +21,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Optional
+import time
 
 from base_machine import Machine, MachineState
 
@@ -116,12 +117,35 @@ class HiPotTester(Machine):
         unit_serial: str,
         job_order_id: str,
         operator_id: str = "AUTO-01",
+        on_progress: Optional[Callable[[float, float], None]] = None,  # (elapsed_s, live_voltage)
+
     ) -> TestResult:
         ts_start = datetime.now(timezone.utc)
         self.state = MachineState.RUNNING
 
         ramp_time = self._current_ramp_time()
         dwell_time = self.base_dwell_time_s
+        step_s = 0.5  # how often to report progress
+
+        
+        elapsed = 0.0
+        while elapsed < ramp_time:
+            step = min(step_s, ramp_time - elapsed)
+            time.sleep(step)
+            elapsed += step
+            if on_progress:
+                live_voltage = self.rated_test_voltage_v * (elapsed / ramp_time)
+                on_progress(elapsed, live_voltage)
+
+        dwell_elapsed = 0.0
+        while dwell_elapsed < dwell_time:
+            step = min(step_s, dwell_time - dwell_elapsed)
+            time.sleep(step)
+            dwell_elapsed += step
+            if on_progress:
+                on_progress(ramp_time + dwell_elapsed, self.rated_test_voltage_v)
+
+
 
         # Noisier / less trustworthy readings once overdue for
         # calibration -- a mis-calibrated tester produces less reliable
