@@ -10,3 +10,10 @@
 | `unit_serial` prefix| `SWB-2026-xxxx` (switchboard) | Matches the actual UUT type |
 | `dwell_time_s` | 2.0 | Short for real HI POT factory context |
 | `job_order_id` | keep pattern | Still fits — engineer-to-order jobs apply to switchboard builds too |
+
+
+### setup 
+be sure to run
+# from your project root (rack-testing-app/IotProject)
+type nul > simulators\__init__.py
+type nul > modbus_gateway\__init__.py

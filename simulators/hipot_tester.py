@@ -23,8 +23,7 @@ from enum import Enum
 from typing import Callable, Optional
 import time
 
-from base_machine import Machine, MachineState
-
+from simulators.base_machine import Machine, MachineState
 
 class TestResultStatus(Enum):
     PASS = "PASS"
@@ -144,7 +143,6 @@ class HiPotTester(Machine):
             dwell_elapsed += step
             if on_progress:
                 on_progress(ramp_time + dwell_elapsed, self.rated_test_voltage_v)
-
 
 
         # Noisier / less trustworthy readings once overdue for

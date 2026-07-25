@@ -21,7 +21,9 @@ from pymodbus.datastore import (
     ModbusServerContext,
 )
 from pymodbus.server import StartAsyncTcpServer
+from simulators.base_machine import MachineState
 from simulators.hipot_tester import HiPotTester
+
 
 # NOTE: pinned to pymodbus==3.7.4 (see requirements). pymodbus 3.14 rewrote
 # the datastore internals (ModbusSlaveContext -> ModbusDeviceContext,
@@ -57,7 +59,7 @@ def build_context() -> ModbusServerContext:
     holding_registers = ModbusSequentialDataBlock(0, [0] * 20)
 
     # Enable remote
-    #coils.setValues(4,1)
+    coils.setValues(4,1)
 
     # Discrete Inputs: pretend last test passed, device idle, interlock OK
     discrete_inputs.setValues(1, [1, 0, 0, 1, 0, 0, 1])  # addrs 10001-10007
@@ -95,45 +97,68 @@ def build_context() -> ModbusServerContext:
     server_context = ModbusServerContext(slaves={SLAVE_ID: slave_context}, single=False)
     return server_context, coils, discrete_inputs, input_registers, holding_registers
 
-def run_test(tester, input_registers, discrete_inputs):
-    def on_progress(elapsed_time: float, live_voltage: float):
+def run_test(tester: HiPotTester, input_registers, discrete_inputs):
+    def on_progress(elapsed_s: float, live_voltage: float):
+        ## Update live progress values
         with lock:
+            ## Unpack voltage from float
             hi, lo = struct.unpack('>HH', struct.pack('>f', live_voltage))
-        
+            ## pack voltage back into 2 byte float. Hi and Lo
+            input_registers.setValues(1, [hi, lo])      # 30001-30002 Measured Voltage
+            input_registers.setValues(5, [int(elapsed_s * 10)])  # 30005 Elapsed Time (x0.1s)
+    print("INFO: HIPOT SIM - Test starting")
+    result = tester.run_test_cycle(
+        unit_serial="SWB-2026-0001",   # placeholder for now
+        job_order_id="JOB-4471",
+        on_progress=on_progress,
+    )
+    
+    with lock:
+        # write final result once the test completes
+        result_code = 1 if result.result == "PASS" else 2
+        input_registers.setValues(7, [result_code])                 # 30007 Result Code
+        discrete_inputs.setValues(3, [0])                            # 10003 Under Test = 0
+        discrete_inputs.setValues(1 if result.result == "PASS" else 2, [1])  # 10001 or 10002
+        print("INFO: HIPOT SIM - Test Finished")
+    
 
-def coil_watcher(coils: ModbusSequentialDataBlock):
+
+def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_registers, discrete_inputs):
     while True:
         with lock: 
-            ##Capture coil values with lock so threads do not touch data at same time        
+            ## Capture coil values with lock so threads do not touch data at same time        
             start_test = coils.getValues(1,1)[0]
             stop_test = coils.getValues(2,1)[0]
             reset_fault = coils.getValues(3,1)[0]
             remote_enable = coils.getValues(4,1)[0]
             offset_calibration = coils.getValues(5,1)[0]
-            ##capture testing state
-            State = "idle" ## Change this later to get actual test state.
-            if remote_enable: ##If remote modbus control is enabled. Should be, for sim purposes
+            ## Capture testing state
+            State = tester.state
+            if remote_enable: ## If remote modbus control is enabled. Should be, for sim purposes
                 match State:
-                    case "idle":
+                    case MachineState.IDLE:
                         if start_test:
-                            print("INFO: HIPOT SIM - Test starting")
-                            
-                            #start test behavior
+                            print("test called")
+                            test_thread = threading.Thread(target= run_test, args= (tester, input_registers, discrete_inputs), daemon= True)
+                            test_thread.start()
+                            # Start test behavior
                         elif offset_calibration:
                             print("INFO: HIPOT SIM - Offset Calibration starting")
-                            #Start calibration behavior
-                    case "running":
+                            # Start calibration behavior
+                    case MachineState.RUNNING:
                         if stop_test:
                             print("INFO: HIPOT SIM - Aborting test")
-                            #Stop test behavior
-                    case "fault_latched":
+                            # Stop test behavior
+                    case MachineState.FAULT:
                         if reset_fault:
                             print("Fault reset")
                         else:
                             print("ERROR: HIPOT SIM - Fault not clear, no action taken")
-                    case "calibrating":
+                    case MachineState.CALIBRATING:
                         print("INFO: HIPOT SIM - Calibrating")
-                        ## when finished set back to idle
+                        ## When finished set back to idle
+                    case MachineState.DOWN:
+                        print("INFO: HIPOT SIM - System down")
                     case _:
                         print("ERROR: HIPOT SIM - System behavior unknown")
             
@@ -153,7 +178,7 @@ async def main():
     tester = HiPotTester(station_id="HIPOT-01")   # created ONCE, lives for the server's lifetime
 
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
-    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, discrete_inputs, input_registers, tester), daemon=True)
+    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs), daemon=True)
     watcher_thread.start()  
     await StartAsyncTcpServer(context=context, address=(HOST, PORT))
     

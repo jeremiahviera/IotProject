@@ -4,43 +4,31 @@ terminal, this in another (or see the combined smoke test below).
 """
 from pymodbus.client import ModbusTcpClient
 import time
+import struct
 
 client = ModbusTcpClient("127.0.0.1", port=5020)
 client.connect()
 
-'''
-di = client.read_discrete_inputs(address=0, count=7, slave=1)
-print("Discrete Inputs (10001-10007):", di.bits[:7])
+def read_live_voltage(client):
+    r = client.read_input_registers(address=0, count=2, slave=1)  # 30001-30002
+    return struct.unpack('>f', struct.pack('>HH', r.registers[0], r.registers[1]))[0]
 
-ir = client.read_input_registers(address=4, count=3, slave=1)
-print("Input Registers (30005-30007):", ir.registers)
-
-hr = client.read_holding_registers(address=0, count=15, slave=1)
-print("Holding Registers (40001-40015):", hr.registers)
-'''
+def read_elapsed_time(client):
+    r = client.read_input_registers(address=4, count=1, slave=1)  # 30005
+    return r.registers[0] / 10.0   # x0.1s scale, per the register map
 
 
-# --- Test 1: Start Test while Remote Enable is still off ---
-# Should print "Remote Control permission denied" on the server side,
-# and NOT start a test.
-print(">>> Writing Start Test with Remote Enable still OFF")
-client.write_coil(address=0, value=True, slave=1)   # 00001 Start Test
-time.sleep(0.5)  # give the watcher loop a chance to poll and react
-
-co = client.read_coils(address=0, count=5, slave=1)
-print("Coils after (should show Start Test self-cleared to False):", co.bits[:5])
-
-# --- Test 2: Turn on Remote Enable, then Start Test for real ---
-print("\n>>> Enabling Remote Enable")
-client.write_coil(address=3, value=True, slave=1)   # 00004 Remote Enable
-time.sleep(0.5)
-
-print(">>> Writing Start Test with Remote Enable ON")
+# --- Trigger a test, then watch it progress ---
+print(">>> Starting a test")
 client.write_coil(address=0, value=True, slave=1)   # 00001 Start Test
 time.sleep(0.5)
 
-co = client.read_coils(address=0, count=5, slave=1)
-print("Coils after (Start Test should be False, Remote Enable should stay True):", co.bits[:5])
+# Poll every ~0.5s while the test is presumably running
+for _ in range(20):
+    voltage = read_live_voltage(client)
+    elapsed = read_elapsed_time(client)
+    print(f"elapsed={elapsed:.1f}s  voltage={voltage:.1f}V")
+    time.sleep(0.5)
 
 
 
