@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Callable, Optional
+import time
 
 
 class MachineState(Enum):
@@ -125,11 +126,16 @@ class Machine(ABC):
         """Represents a technician performing scheduled maintenance /
         recalibration. Resets wear counters; does not touch total
         lifetime cycle count."""
+        ## simulate calibration time
+        self.state = MachineState.CALIBRATING
+        time.sleep(2.0)
+        
         self.cycles_since_calibration = 0
         self.last_calibration_date = datetime.now(timezone.utc).date().isoformat()
-        self._fault_code = None
-        if self.state in (MachineState.DOWN, MachineState.FAULT):
-            self.state = MachineState.IDLE
+    
+        self.state = MachineState.IDLE
+   
+
 
     def set_fault(self, fault_code: str):
         self._fault_code = fault_code

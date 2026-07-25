@@ -120,7 +120,12 @@ def run_test(tester: HiPotTester, input_registers, discrete_inputs):
         discrete_inputs.setValues(3, [0])                            # 10003 Under Test = 0
         discrete_inputs.setValues(1 if result.result == "PASS" else 2, [1])  # 10001 or 10002
         print("INFO: HIPOT SIM - Test Finished")
-    
+        
+def run_calibrate(tester:HiPotTester):
+    print("INFO: HIPOT SIM - Calibration starting")
+    tester.calibrate()
+    print("INFO: HIPOT SIM - Calibration finished")
+
 
 
 def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_registers, discrete_inputs):
@@ -138,13 +143,15 @@ def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_re
                 match State:
                     case MachineState.IDLE:
                         if start_test:
-                            print("test called")
+                            # Start test behavior
                             test_thread = threading.Thread(target= run_test, args= (tester, input_registers, discrete_inputs), daemon= True)
                             test_thread.start()
                             # Start test behavior
                         elif offset_calibration:
-                            print("INFO: HIPOT SIM - Offset Calibration starting")
+                            print("calib sent")
                             # Start calibration behavior
+                            calibrate_thread = threading.Thread(target= run_calibrate, args=(tester,), daemon=True)
+                            calibrate_thread.start()
                     case MachineState.RUNNING:
                         if stop_test:
                             print("INFO: HIPOT SIM - Aborting test")

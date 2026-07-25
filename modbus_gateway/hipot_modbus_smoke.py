@@ -20,6 +20,19 @@ def read_elapsed_time(client):
 
 # --- Trigger a test, then watch it progress ---
 print(">>> Starting a test")
+client.write_coil(address=4, value=True, slave=1)   # 00001 Start Test
+time.sleep(0.5)
+client.write_coil(address=0, value=True, slave=1)   # 00001 Start Test
+
+# Poll every ~0.5s while the test is presumably running
+for _ in range(20):
+    voltage = read_live_voltage(client)
+    elapsed = read_elapsed_time(client)
+    print(f"elapsed={elapsed:.1f}s  voltage={voltage:.1f}V")
+    time.sleep(0.5)
+    
+# --- Trigger a test, then watch it progress ---
+print(">>> Starting a test")
 client.write_coil(address=0, value=True, slave=1)   # 00001 Start Test
 time.sleep(0.5)
 
@@ -29,6 +42,7 @@ for _ in range(20):
     elapsed = read_elapsed_time(client)
     print(f"elapsed={elapsed:.1f}s  voltage={voltage:.1f}V")
     time.sleep(0.5)
+
 
 
 
