@@ -16,6 +16,7 @@ Two data streams, same distinction as before:
 from __future__ import annotations
 
 import random
+import threading
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -116,11 +117,12 @@ class HiPotTester(Machine):
         unit_serial: str,
         job_order_id: str,
         operator_id: str = "AUTO-01",
-        on_progress: Optional[Callable[[float, float], None]] = None,  # (elapsed_s, live_voltage)
-
+        on_progress: Optional[Callable[[float, float], None]] = None,  # (elapsed_s, live_voltage),
+        stop_event: Optional[threading.event] = None
     ) -> TestResult:
         ts_start = datetime.now(timezone.utc)
         self.state = MachineState.RUNNING
+        aborted = False 
 
         ramp_time = self._current_ramp_time()
         dwell_time = self.base_dwell_time_s
@@ -129,6 +131,9 @@ class HiPotTester(Machine):
         
         elapsed = 0.0
         while elapsed < ramp_time:
+            if stop_event and stop_event.is_set():
+                aborted = True
+                break
             step = min(step_s, ramp_time - elapsed)
             time.sleep(step)
             elapsed += step
@@ -136,14 +141,41 @@ class HiPotTester(Machine):
                 live_voltage = self.rated_test_voltage_v * (elapsed / ramp_time)
                 on_progress(elapsed, live_voltage)
 
-        dwell_elapsed = 0.0
-        while dwell_elapsed < dwell_time:
-            step = min(step_s, dwell_time - dwell_elapsed)
-            time.sleep(step)
-            dwell_elapsed += step
-            if on_progress:
-                on_progress(ramp_time + dwell_elapsed, self.rated_test_voltage_v)
+        
+            dwell_elapsed = 0.0
+        if not aborted:
+            while dwell_elapsed < dwell_time:
+                if stop_event and stop_event.is_set():
+                    aborted = True
+                    break
+                step = min(step_s, dwell_time - dwell_elapsed)
+                time.sleep(step)
+                dwell_elapsed += step
+                if on_progress:
+                    on_progress(ramp_time + dwell_elapsed, self.rated_test_voltage_v)
 
+        self.state = MachineState.IDLE
+        
+        if aborted:
+            record = TestResult(
+            test_id=str(uuid.uuid4()),
+            station_id=self.station_id,
+            unit_serial=unit_serial,
+            job_order_id=job_order_id,
+            timestamp_start=ts_start.isoformat(),
+            timestamp_end=datetime.now(timezone.utc).isoformat(),
+            test_voltage_target_v=self.rated_test_voltage_v,
+            test_voltage_actual_v=0.0,
+            dwell_time_s=dwell_time,
+            leakage_current_ma=0.0,
+            leakage_threshold_ma=self.leakage_threshold_ma,
+            result="ABORTED",
+            fail_reason="USER_INTERRUPT",
+            operator_id=operator_id,
+        )
+            if self._on_test_result:
+                self._on_test_result(record)
+            return record
 
         # Noisier / less trustworthy readings once overdue for
         # calibration -- a mis-calibrated tester produces less reliable
@@ -170,7 +202,6 @@ class HiPotTester(Machine):
 
         ts_end = datetime.now(timezone.utc)
         self._register_cycle()          # shared wear bookkeeping from Machine
-        self.state = MachineState.IDLE
 
         record = TestResult(
             test_id=str(uuid.uuid4()),

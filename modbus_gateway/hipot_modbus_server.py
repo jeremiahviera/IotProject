@@ -98,6 +98,8 @@ def build_context() -> ModbusServerContext:
     return server_context, coils, discrete_inputs, input_registers, holding_registers
 
 def run_test(tester: HiPotTester, input_registers, discrete_inputs):
+    with lock:
+        discrete_inputs.setValues(3,[1]) # 10003 Set unit to under test
     def on_progress(elapsed_s: float, live_voltage: float):
         ## Update live progress values
         with lock:
@@ -121,10 +123,16 @@ def run_test(tester: HiPotTester, input_registers, discrete_inputs):
         discrete_inputs.setValues(1 if result.result == "PASS" else 2, [1])  # 10001 or 10002
         print("INFO: HIPOT SIM - Test Finished")
         
+        
+def stop_test(tester:HiPotTester, input_registers, discrete_inputs):
+    
+    
+    
 def run_calibrate(tester:HiPotTester):
     print("INFO: HIPOT SIM - Calibration starting")
     tester.calibrate()
     print("INFO: HIPOT SIM - Calibration finished")
+
 
 
 
