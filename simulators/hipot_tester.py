@@ -29,6 +29,7 @@ from simulators.base_machine import Machine, MachineState
 class TestResultStatus(Enum):
     PASS = "PASS"
     FAIL = "FAIL"
+    ABORTED = "ABORTED"
 
 
 @dataclass
@@ -169,7 +170,7 @@ class HiPotTester(Machine):
             dwell_time_s=dwell_time,
             leakage_current_ma=0.0,
             leakage_threshold_ma=self.leakage_threshold_ma,
-            result="ABORTED",
+            result=TestResultStatus.ABORTED,
             fail_reason="USER_INTERRUPT",
             operator_id=operator_id,
         )

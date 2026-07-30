@@ -37,6 +37,8 @@ PORT = 5020          # NOT 502 -- see earlier note on unprivileged ports
 SLAVE_ID = 1
 lock = threading.Lock() 
 polling_period = 0.3 # time in ms | 0.2 would be 200ms
+current_stop_event = None  # module-level, tracks the ACTIVE test's Event
+
 
 
 def build_context() -> ModbusServerContext:
@@ -98,6 +100,9 @@ def build_context() -> ModbusServerContext:
     return server_context, coils, discrete_inputs, input_registers, holding_registers
 
 def run_test(tester: HiPotTester, input_registers, discrete_inputs):
+    global current_stop_event # Stop event to listen for test abortions
+    stop_event = threading.Event()
+    current_stop_event = stop_event
     with lock:
         discrete_inputs.setValues(3,[1]) # 10003 Set unit to under test
     def on_progress(elapsed_s: float, live_voltage: float):
@@ -113,19 +118,31 @@ def run_test(tester: HiPotTester, input_registers, discrete_inputs):
         unit_serial="SWB-2026-0001",   # placeholder for now
         job_order_id="JOB-4471",
         on_progress=on_progress,
+        stop_event= stop_event
     )
-    
     with lock:
         # write final result once the test completes
-        result_code = 1 if result.result == "PASS" else 2
+        match result.result:
+            case "PASS":
+                result_code = 1
+            case "Fail":
+                result_code = 3
+            case "ABORTED":
+                result_code = 7
+            case _:
+                result_code = 0 # Change for error reporting
         input_registers.setValues(7, [result_code])                 # 30007 Result Code
         discrete_inputs.setValues(3, [0])                            # 10003 Under Test = 0
         discrete_inputs.setValues(1 if result.result == "PASS" else 2, [1])  # 10001 or 10002
         print("INFO: HIPOT SIM - Test Finished")
+    current_stop_event = None # Clear stop event 
         
         
 def stop_test(tester:HiPotTester, input_registers, discrete_inputs):
-    
+        print("INFO: HIPOT SIM - Aborting test")
+        if current_stop_event:
+            current_stop_event.set()   # Signal stop test
+        
     
     
 def run_calibrate(tester:HiPotTester):
@@ -156,13 +173,13 @@ def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_re
                             test_thread.start()
                             # Start test behavior
                         elif offset_calibration:
-                            print("calib sent")
                             # Start calibration behavior
                             calibrate_thread = threading.Thread(target= run_calibrate, args=(tester,), daemon=True)
                             calibrate_thread.start()
                     case MachineState.RUNNING:
                         if stop_test:
                             print("INFO: HIPOT SIM - Aborting test")
+                            stop_test(tester,input_registers, discrete_inputs)
                             # Stop test behavior
                     case MachineState.FAULT:
                         if reset_fault:
