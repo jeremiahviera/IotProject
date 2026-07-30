@@ -113,7 +113,8 @@ def run_test(tester: HiPotTester, input_registers, discrete_inputs):
             ## pack voltage back into 2 byte float. Hi and Lo
             input_registers.setValues(1, [hi, lo])      # 30001-30002 Measured Voltage
             input_registers.setValues(5, [int(elapsed_s * 10)])  # 30005 Elapsed Time (x0.1s)
-    print("INFO: HIPOT SIM - Test starting")
+    print("")
+    print("----INFO: HIPOT SIM - Test starting----")
     result = tester.run_test_cycle(
         unit_serial="SWB-2026-0001",   # placeholder for now
         job_order_id="JOB-4471",
@@ -122,23 +123,27 @@ def run_test(tester: HiPotTester, input_registers, discrete_inputs):
     )
     with lock:
         # write final result once the test completes
-        match result.result:
+        match result.result.value:
             case "PASS":
+                print("INFO: HIPOT SIM - Test Passed")
                 result_code = 1
             case "Fail":
+                print("INFO: HIPOT SIM - Test Failed")
                 result_code = 3
             case "ABORTED":
+                print("INFO: HIPOT SIM - Test Aborted")
                 result_code = 7
             case _:
                 result_code = 0 # Change for error reporting
         input_registers.setValues(7, [result_code])                 # 30007 Result Code
         discrete_inputs.setValues(3, [0])                            # 10003 Under Test = 0
         discrete_inputs.setValues(1 if result.result == "PASS" else 2, [1])  # 10001 or 10002
-        print("INFO: HIPOT SIM - Test Finished")
+        print("----INFO: HIPOT SIM - Test Finished----")
+        print("")
     current_stop_event = None # Clear stop event 
         
         
-def stop_test(tester:HiPotTester, input_registers, discrete_inputs):
+def abort_test(tester:HiPotTester, input_registers, discrete_inputs):
         print("INFO: HIPOT SIM - Aborting test")
         if current_stop_event:
             current_stop_event.set()   # Signal stop test
@@ -177,9 +182,8 @@ def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_re
                             calibrate_thread = threading.Thread(target= run_calibrate, args=(tester,), daemon=True)
                             calibrate_thread.start()
                     case MachineState.RUNNING:
-                        if stop_test:
-                            print("INFO: HIPOT SIM - Aborting test")
-                            stop_test(tester,input_registers, discrete_inputs)
+                        if current_stop_event:
+                            abort_test(tester,input_registers, discrete_inputs)
                             # Stop test behavior
                     case MachineState.FAULT:
                         if reset_fault:
