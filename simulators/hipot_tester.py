@@ -95,9 +95,14 @@ class HiPotTester(Machine):
     # ------------------------------------------------------------
 
     def _collect_metrics(self) -> dict:
+        # Generate random temp. uses random for simplicity, may incorperate more realistic temps tied to wear in future
+        temp = round(random.gauss(mu=35.0, sigma=2), 1) # Extremely rare chance of temp spike. 
+        temp = 46    #uncomment for fault
+        if temp > 45.0 and self.state != MachineState.FAULT:
+            self.set_fault("OVER_TEMP")
         return {
             "ramp_time_actual_s": round(self._current_ramp_time(), 3),
-            "internal_temp_c": round(random.gauss(mu=35.0, sigma=1.5), 1),
+            "internal_temp_c": temp,
         }
 
     def _current_ramp_time(self) -> float:

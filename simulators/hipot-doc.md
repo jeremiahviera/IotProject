@@ -42,6 +42,9 @@ no word swap, for all 32-bit values
 | 10005 | HV Active (Danger) | 1 = high voltage currently present at output terminal |
 | 10006 | GFI Tripped | 1 = ground fault interrupt triggered (matches Chroma's GFI protection). **Not currently modeled by the simulator** — reserved for future use, always 0. |
 | 10007 | Remote Active | 1 = device currently under remote (Modbus) control |
+| 10008 | Fault_latched | 1 = device has fault latched. In fault mode, Will not run until cleared |
+
+
 
 ---
 
@@ -58,7 +61,7 @@ no word swap, for all 32-bit values
 ### Result Codes (register 30007)
 Modeled on Chroma's documented fail categories. The simulator currently implements codes
 0, 1, 2, and 5 (marked below); the rest are reserved for future extension (ARC FAIL, LOW
-FAIL, GFI TRIPPED, and USER INTERRUPT are not yet modeled in `HiPotTester`).
+FAIL, and GFI TRIPPED are not yet modeled in `HiPotTester`).
 
 | Code | Meaning | Implemented? |
 |---|---|---|

@@ -99,6 +99,22 @@ def build_context() -> ModbusServerContext:
     server_context = ModbusServerContext(slaves={SLAVE_ID: slave_context}, single=False)
     return server_context, coils, discrete_inputs, input_registers, holding_registers
 
+def health_sampler(tester, interval_s=5.0):
+    while True:
+        with lock:
+            reading = tester.sample_health()
+            metrics = reading.metrics
+            if tester.state == MachineState.FAULT:
+                 print("----WARNING: HIPOT SIM - FAULT DETECTED----")
+
+            '''         
+            print(f"[HEALTH] {tester.station_id}: "
+                  f"state={tester.state.value} "
+                  f"self_check={reading.self_check_status} "
+                  f"metrics={reading.metrics}")
+            '''
+        time.sleep(interval_s)
+
 def run_test(tester: HiPotTester, input_registers, discrete_inputs):
     global current_stop_event # Stop event to listen for test abortions
     stop_event = threading.Event()
@@ -155,6 +171,11 @@ def run_calibrate(tester:HiPotTester):
     tester.calibrate()
     print("INFO: HIPOT SIM - Calibration finished")
 
+def reset_fault(tester:HiPotTester):
+    print("INFO: HIPOT SIM - Resetting Fault")
+    tester.clear_fault()
+    print("INFO: HIPOT SIM - State: ", tester.state)
+    print("INFO: HIPOT SIM - Fault Reset")
 
 
 

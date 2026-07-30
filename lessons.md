@@ -14,3 +14,9 @@ registers
 reading/writing
 
 
+
+# note dump
+## hipot sim
+hipot sim has 2 channels. one for reporting testing over modbus, and another to report machine health and state over other gateway
+one state that will be reported on both will be the machine state, idle, running etc and faults. this must be exposed to modbus for machine functionality.
+
