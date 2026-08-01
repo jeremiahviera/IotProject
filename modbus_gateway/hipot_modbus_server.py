@@ -50,7 +50,7 @@ def build_context() -> ModbusServerContext:
     Block sizes, with a little headroom over the documented address
     ranges so nothing overflows as fields get added later:
       co (coils)            -> 00001-00005  -> 5 used,  sized 10
-      di (discrete inputs)  -> 10001-10007  -> 7 used,  sized 10
+      di (discrete inputs)  -> 10001-10008  -> 8 used,  sized 10
       ir (input registers)  -> 30001-30007  -> 7 used,  sized 10
       hr (holding registers)-> 40001-40015  -> 15 used, sized 20
     """
@@ -63,8 +63,9 @@ def build_context() -> ModbusServerContext:
     # Enable remote
     coils.setValues(4,1)
 
-    # Discrete Inputs: pretend last test passed, device idle, interlock OK
-    discrete_inputs.setValues(1, [1, 0, 0, 1, 0, 0, 1])  # addrs 10001-10007
+    # Discrete Inputs: pretend last test passed, device idle, interlock OK,
+    # no fault latched
+    discrete_inputs.setValues(1, [1, 0, 0, 1, 0, 0, 1, 0])  # addrs 10001-10008
 
     # Input Registers: fake a plausible "last known" reading
     # 30005 Elapsed Time=0, 30006 Step=1, 30007 Result Code=1 (PASS)
@@ -115,19 +116,44 @@ def health_sampler(tester, interval_s=5.0):
             '''
         time.sleep(interval_s)
 
+def apply_setpoints(holding_registers, tester: HiPotTester):
+    """Load whatever test recipe is currently sitting in the setpoint
+    holding registers (40001-40015) into the tester -- mirrors a master
+    writing config registers before writing the Start Test coil on a
+    real hi-pot tester. Only the fields this simulator models are read;
+    fall time / low limit / arc limit / GFI / auto-range stay
+    documented-but-inert, per the register map."""
+    voltage_setpoint_v = holding_registers.getValues(2, 1)[0]     # 40002
+    ramp_time_x01s = holding_registers.getValues(3, 1)[0]         # 40003
+    dwell_time_x01s = holding_registers.getValues(4, 1)[0]        # 40004
+    hi, lo = holding_registers.getValues(7, 2)                    # 40007-40008
+    current_high_limit_ua = (hi << 16) | lo
+
+    tester.configure(
+        test_voltage_v=voltage_setpoint_v,
+        ramp_time_s=ramp_time_x01s / 10.0,
+        dwell_time_s=dwell_time_x01s / 10.0,
+        leakage_threshold_ma=current_high_limit_ua / 1000.0,
+    )
+
+
 def run_test(tester: HiPotTester, input_registers, discrete_inputs):
     global current_stop_event # Stop event to listen for test abortions
     stop_event = threading.Event()
     current_stop_event = stop_event
     with lock:
-        discrete_inputs.setValues(3,[1]) # 10003 Set unit to under test
-    def on_progress(elapsed_s: float, live_voltage: float):
+        discrete_inputs.setValues(3, [1])  # 10003 Under Test
+        discrete_inputs.setValues(5, [1])  # 10005 HV Active
+
+    def on_progress(elapsed_s: float, live_voltage: float, live_current_ma: float):
         ## Update live progress values
         with lock:
             ## Unpack voltage from float
-            hi, lo = struct.unpack('>HH', struct.pack('>f', live_voltage))
-            ## pack voltage back into 2 byte float. Hi and Lo
-            input_registers.setValues(1, [hi, lo])      # 30001-30002 Measured Voltage
+            v_hi, v_lo = struct.unpack('>HH', struct.pack('>f', live_voltage))
+            input_registers.setValues(1, [v_hi, v_lo])      # 30001-30002 Measured Voltage
+            ## Measured Current is documented in uA -- tester reports mA
+            c_hi, c_lo = struct.unpack('>HH', struct.pack('>f', live_current_ma * 1000.0))
+            input_registers.setValues(3, [c_hi, c_lo])      # 30003-30004 Measured Current
             input_registers.setValues(5, [int(elapsed_s * 10)])  # 30005 Elapsed Time (x0.1s)
     print("")
     print("----INFO: HIPOT SIM - Test starting----")
@@ -138,27 +164,38 @@ def run_test(tester: HiPotTester, input_registers, discrete_inputs):
         stop_event= stop_event
     )
     with lock:
-        # write final result once the test completes
-        match result.result.value:
+        # write final result once the test completes -- codes match the
+        # Result Codes table in the register map
+        match result.result:
             case "PASS":
                 print("INFO: HIPOT SIM - Test Passed")
                 result_code = 1
-            case "Fail":
-                print("INFO: HIPOT SIM - Test Failed")
-                result_code = 3
+            case "FAIL":
+                if result.fail_reason == "LEAKAGE_EXCEEDED_THRESHOLD":
+                    result_code = 2   # HIGH FAIL
+                elif result.fail_reason == "VOLTAGE_RAMP_UNSTABLE":
+                    result_code = 5   # NO OUTPUT
+                else:
+                    result_code = 2
+                print("INFO: HIPOT SIM - Test Failed:", result.fail_reason)
             case "ABORTED":
                 print("INFO: HIPOT SIM - Test Aborted")
-                result_code = 7
+                result_code = 7   # USER INTERRUPT
             case _:
-                result_code = 0 # Change for error reporting
+                result_code = 0
         input_registers.setValues(7, [result_code])                 # 30007 Result Code
         discrete_inputs.setValues(3, [0])                            # 10003 Under Test = 0
-        discrete_inputs.setValues(1 if result.result == "PASS" else 2, [1])  # 10001 or 10002
+        discrete_inputs.setValues(5, [0])                            # 10005 HV Active = 0
+        discrete_inputs.setValues(1, [0, 0])                         # clear 10001/10002 before judging
+        if result.result == "PASS":
+            discrete_inputs.setValues(1, [1])
+        elif result.result == "FAIL":
+            discrete_inputs.setValues(2, [1])
         print("----INFO: HIPOT SIM - Test Finished----")
         print("")
-    current_stop_event = None # Clear stop event 
-        
-        
+    current_stop_event = None # Clear stop event
+
+
 def abort_test(tester:HiPotTester, input_registers, discrete_inputs):
         print("INFO: HIPOT SIM - Aborting test")
         if current_stop_event:
@@ -179,22 +216,31 @@ def reset_fault(tester:HiPotTester):
 
 
 
-def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_registers, discrete_inputs):
+def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_registers, discrete_inputs, holding_registers):
     while True:
-        with lock: 
-            ## Capture coil values with lock so threads do not touch data at same time        
+        with lock:
+            ## Capture coil values with lock so threads do not touch data at same time
             start_test = coils.getValues(1,1)[0]
             stop_test = coils.getValues(2,1)[0]
-            reset_fault = coils.getValues(3,1)[0]
+            reset_fault_cmd = coils.getValues(3,1)[0]
             remote_enable = coils.getValues(4,1)[0]
             offset_calibration = coils.getValues(5,1)[0]
             ## Capture testing state
             State = tester.state
+
+            # Synced every poll regardless of which branch below runs --
+            # a fault can be raised asynchronously by health_sampler, not
+            # just from a coil write, and Remote Active should always
+            # mirror the actual Remote Enable coil.
+            discrete_inputs.setValues(7, [1 if remote_enable else 0])                  # 10007 Remote Active
+            discrete_inputs.setValues(8, [1 if State == MachineState.FAULT else 0])    # 10008 Fault_latched
+
             if remote_enable: ## If remote modbus control is enabled. Should be, for sim purposes
                 match State:
                     case MachineState.IDLE:
                         if start_test:
                             # Start test behavior
+                            apply_setpoints(holding_registers, tester)
                             test_thread = threading.Thread(target= run_test, args= (tester, input_registers, discrete_inputs), daemon= True)
                             test_thread.start()
                             # Start test behavior
@@ -203,12 +249,12 @@ def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_re
                             calibrate_thread = threading.Thread(target= run_calibrate, args=(tester,), daemon=True)
                             calibrate_thread.start()
                     case MachineState.RUNNING:
-                        if current_stop_event:
+                        if stop_test:
                             abort_test(tester,input_registers, discrete_inputs)
                             # Stop test behavior
                     case MachineState.FAULT:
-                        if reset_fault:
-                            print("Fault reset")
+                        if reset_fault_cmd:
+                            reset_fault(tester)
                         else:
                             print("ERROR: HIPOT SIM - Fault not clear, no action taken")
                     case MachineState.CALIBRATING:
@@ -218,13 +264,13 @@ def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_re
                         print("INFO: HIPOT SIM - System down")
                     case _:
                         print("ERROR: HIPOT SIM - System behavior unknown")
-            
-            else:  
-                print("WARNING: HIPOT SIM - Remote Control permission denied")  
-                
+
+            else:
+                print("WARNING: HIPOT SIM - Remote Control permission denied")
+
             #reset coil values
             coils.setValues(1, [0, 0, 0])   # clears 1-3: Start Test, Stop, Reset Fault
-            coils.setValues(5, [0]) 
+            coils.setValues(5, [0])
         time.sleep(polling_period) #the period the function polls
     
         
@@ -235,8 +281,10 @@ async def main():
     tester = HiPotTester(station_id="HIPOT-01")   # created ONCE, lives for the server's lifetime
 
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
-    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs), daemon=True)
-    watcher_thread.start()  
+    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs, holding_registers), daemon=True)
+    watcher_thread.start()
+    health_thread = threading.Thread(target=health_sampler, args=(tester,), daemon=True)
+    health_thread.start()
     await StartAsyncTcpServer(context=context, address=(HOST, PORT))
     
 

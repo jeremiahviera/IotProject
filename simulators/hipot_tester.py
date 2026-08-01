@@ -91,13 +91,34 @@ class HiPotTester(Machine):
         self._on_test_result = on_test_result
 
     # ------------------------------------------------------------
+    # Load a new test recipe (mirrors a master writing setpoint
+    # holding registers before Start Test on a real hi-pot tester --
+    # only the fields provided are changed).
+    # ------------------------------------------------------------
+
+    def configure(
+        self,
+        test_voltage_v: Optional[float] = None,
+        ramp_time_s: Optional[float] = None,
+        dwell_time_s: Optional[float] = None,
+        leakage_threshold_ma: Optional[float] = None,
+    ):
+        if test_voltage_v is not None:
+            self.rated_test_voltage_v = test_voltage_v
+        if ramp_time_s is not None:
+            self.base_ramp_time_s = ramp_time_s
+        if dwell_time_s is not None:
+            self.base_dwell_time_s = dwell_time_s
+        if leakage_threshold_ma is not None:
+            self.leakage_threshold_ma = leakage_threshold_ma
+
+    # ------------------------------------------------------------
     # Required by Machine: this station's specific health payload
     # ------------------------------------------------------------
 
     def _collect_metrics(self) -> dict:
         # Generate random temp. uses random for simplicity, may incorperate more realistic temps tied to wear in future
-        temp = round(random.gauss(mu=35.0, sigma=2), 1) # Extremely rare chance of temp spike. 
-        temp = 46    #uncomment for fault
+        temp = round(random.gauss(mu=35.0, sigma=2), 1) # Extremely rare chance of temp spike.
         if temp > 45.0 and self.state != MachineState.FAULT:
             self.set_fault("OVER_TEMP")
         return {
@@ -123,19 +144,37 @@ class HiPotTester(Machine):
         unit_serial: str,
         job_order_id: str,
         operator_id: str = "AUTO-01",
-        on_progress: Optional[Callable[[float, float], None]] = None,  # (elapsed_s, live_voltage),
-        stop_event: Optional[threading.event] = None
+        on_progress: Optional[Callable[[float, float, float], None]] = None,  # (elapsed_s, live_voltage, live_current_ma)
+        stop_event: Optional[threading.Event] = None
     ) -> TestResult:
         ts_start = datetime.now(timezone.utc)
         self.state = MachineState.RUNNING
-        aborted = False 
+        aborted = False
 
         ramp_time = self._current_ramp_time()
         dwell_time = self.base_dwell_time_s
         step_s = 0.5  # how often to report progress
 
-        
+        # Judged up front rather than after the loops: leakage is
+        # roughly ohmic (I = V/R), so live current during ramp can
+        # track this same value scaled by the live voltage fraction,
+        # and dwell can hold at it -- instead of the live readings and
+        # the final judged value coming from two separate random draws.
+        noise_scale = 0.3 if not self.is_overdue_for_calibration() else 1.2
+        leakage = max(0.0, random.gauss(mu=1.0, sigma=noise_scale))
+        if random.random() < 0.03:
+            leakage += random.uniform(1.5, 3.5)
+        # Ramp is normally rock-stable at setpoint; instability (bad
+        # connection / marginal contact) is a rare event, same modeling
+        # approach as the leakage defect chance above -- not uniform
+        # noise that happens to straddle the fail threshold.
+        if random.random() < 0.02:
+            voltage_actual = self.rated_test_voltage_v * random.uniform(0.90, 0.97)
+        else:
+            voltage_actual = self.rated_test_voltage_v * random.uniform(0.99, 1.0)
+
         elapsed = 0.0
+        dwell_elapsed = 0.0
         while elapsed < ramp_time:
             if stop_event and stop_event.is_set():
                 aborted = True
@@ -145,10 +184,9 @@ class HiPotTester(Machine):
             elapsed += step
             if on_progress:
                 live_voltage = self.rated_test_voltage_v * (elapsed / ramp_time)
-                on_progress(elapsed, live_voltage)
+                live_current = leakage * (elapsed / ramp_time)
+                on_progress(elapsed, live_voltage, live_current)
 
-        
-            dwell_elapsed = 0.0
         if not aborted:
             while dwell_elapsed < dwell_time:
                 if stop_event and stop_event.is_set():
@@ -158,10 +196,11 @@ class HiPotTester(Machine):
                 time.sleep(step)
                 dwell_elapsed += step
                 if on_progress:
-                    on_progress(ramp_time + dwell_elapsed, self.rated_test_voltage_v)
+                    live_current = max(0.0, leakage + random.uniform(-0.05, 0.05))
+                    on_progress(ramp_time + dwell_elapsed, self.rated_test_voltage_v, live_current)
 
         self.state = MachineState.IDLE
-        
+
         if aborted:
             record = TestResult(
             test_id=str(uuid.uuid4()),
@@ -175,27 +214,13 @@ class HiPotTester(Machine):
             dwell_time_s=dwell_time,
             leakage_current_ma=0.0,
             leakage_threshold_ma=self.leakage_threshold_ma,
-            result=TestResultStatus.ABORTED,
+            result=TestResultStatus.ABORTED.value,
             fail_reason="USER_INTERRUPT",
             operator_id=operator_id,
         )
             if self._on_test_result:
                 self._on_test_result(record)
             return record
-
-        # Noisier / less trustworthy readings once overdue for
-        # calibration -- a mis-calibrated tester produces less reliable
-        # measurements, independent of whether the product is actually
-        # good or bad.
-        noise_scale = 0.3 if not self.is_overdue_for_calibration() else 1.2
-        leakage = max(0.0, random.gauss(mu=1.0, sigma=noise_scale))
-
-        # Baseline chance of a genuine product defect, independent of
-        # tester health -- this is what the test exists to catch.
-        if random.random() < 0.03:
-            leakage += random.uniform(1.5, 3.5)
-
-        voltage_actual = self.rated_test_voltage_v * random.uniform(0.96, 1.0)
 
         result_status = TestResultStatus.PASS
         fail_reason = None
