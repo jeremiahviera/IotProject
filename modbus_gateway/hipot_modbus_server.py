@@ -21,6 +21,7 @@ from pymodbus.datastore import (
     ModbusServerContext,
 )
 from pymodbus.server import StartAsyncTcpServer
+from modbus_gateway.health_server import create_health_app
 from simulators.base_machine import MachineState
 from simulators.hipot_tester import HiPotTester
 
@@ -280,13 +281,19 @@ async def main():
     tester = HiPotTester(station_id="HIPOT-01")   # created ONCE, lives for the server's lifetime
 
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
+    # Create app instance for health band server
+    app = create_health_app(tester, lock)
     # Start server procceses
     watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs, holding_registers), daemon=True) # Watches for writes to registers
     watcher_thread.start()
     health_thread = threading.Thread(target=health_sampler, args=(tester,), daemon=True) # polls health data
     health_thread.start()
-    health_server = threading.Thread(target = app.run, daemon = True) # Server for health band. Listens to calls on http to report health information
-    health_server
+    server_thread = threading.Thread(
+            target=app.run,
+            kwargs={"port": 5021, "use_reloader": False},
+            daemon=True,
+        )
+    server_thread.start()
     await StartAsyncTcpServer(context=context, address=(HOST, PORT))
     
 
