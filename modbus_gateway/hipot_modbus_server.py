@@ -24,7 +24,6 @@ from pymodbus.server import StartAsyncTcpServer
 from simulators.base_machine import MachineState
 from simulators.hipot_tester import HiPotTester
 
-
 # NOTE: pinned to pymodbus==3.7.4 (see requirements). pymodbus 3.14 rewrote
 # the datastore internals (ModbusSlaveContext -> ModbusDeviceContext,
 # setValues/getValues removed) in a way that's poorly documented as of this
@@ -281,10 +280,13 @@ async def main():
     tester = HiPotTester(station_id="HIPOT-01")   # created ONCE, lives for the server's lifetime
 
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
-    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs, holding_registers), daemon=True)
+    # Start server procceses
+    watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs, holding_registers), daemon=True) # Watches for writes to registers
     watcher_thread.start()
-    health_thread = threading.Thread(target=health_sampler, args=(tester,), daemon=True)
+    health_thread = threading.Thread(target=health_sampler, args=(tester,), daemon=True) # polls health data
     health_thread.start()
+    health_server = threading.Thread(target = app.run, daemon = True) # Server for health band. Listens to calls on http to report health information
+    health_server
     await StartAsyncTcpServer(context=context, address=(HOST, PORT))
     
 
