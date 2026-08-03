@@ -4,6 +4,10 @@ myenv/
 venv/
 env/
 
+mosquitto/data/
+mosquitto/log/
+
 # Python bytecode / cache
 __pycache__/
 *.pyc
+`
