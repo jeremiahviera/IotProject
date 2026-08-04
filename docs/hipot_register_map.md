@@ -112,6 +112,38 @@ Modbus-sourced process data into a single coherent MQTT output.
 
 ---
 
+## Test Traceability Data — Also Out-of-Band
+
+Unit identity and business-context fields (`unit_serial`, `job_order_id`, `operator_id`,
+`fail_reason`, `test_id`) are **not exposed through this Modbus register map**, for the same
+reason machine health isn't: **Modbus has no native string type**, and these are fundamentally
+strings, not bits or documented integer enums. `fail_reason` specifically is already fully
+recoverable from the Result Code register above (`LEAKAGE_EXCEEDED_THRESHOLD` = code 2,
+`VOLTAGE_RAMP_UNSTABLE` = code 5, `USER_INTERRUPT` = code 7) — the string form is exposed for
+readability/traceability, not because Result Code is insufficient on its own.
+
+This also mirrors a real hi-pot test station: the instrument itself has no idea what unit
+serial or job order is sitting in the fixture. That context comes from a station-level system
+(an HMI, a barcode scanner, an MES) tracking what's physically under test right now, and gets
+layered on top of the instrument's raw pass/fail signal by whatever supervises the station —
+not something a Chroma-class tester's own register map would ever carry.
+
+Exposed via the same HTTP interface as machine health (`http://<host>:5021/`), as a separate
+endpoint from `/health` since it's a distinct data class (event-driven traceability data tied
+to the last completed test, not a live, continuously-updating register):
+
+| Endpoint | Field | Type | Description |
+|---|---|---|---|
+| `GET /test_result` | `test_id` | string (UUID) | Unique identifier for this specific test event |
+| | `unit_serial` | string | Serial number of the switchboard section under test |
+| | `job_order_id` | string | Engineer-to-order job this unit belongs to |
+| | `operator_id` | string | Operator or automation ID that ran the test |
+| | `fail_reason` | string, nullable | Detailed failure category; `null` on a pass, or before any test has run |
+
+Returns HTTP 404 if no test has completed yet (e.g. immediately after the server starts).
+
+---
+
 ## Example test sequence over the wire
 
 1. Master writes `40001`–`40015` → configure Test Mode = 1 (DC), 2200V target, ~8.0s ramp,
@@ -121,7 +153,9 @@ Modbus-sourced process data into a single coherent MQTT output.
 4. Master polls `30001`–`30007` every ~200ms during ramp/test to log live voltage/current
 5. Test completes → `10003` = 0, `10001` or `10002` set, `30007` holds the result code
 6. Master reads pass/fail and result code, logs it, writes coil `00003` (Reset Fault) if needed before the next DUT
-7. Separately (out-of-band), the gateway reads machine health directly from the device and publishes it to MQTT on its own periodic cadence, independent of this test sequence
+7. Separately (out-of-band), the gateway polls both machine health (`/health`) and the last
+   completed test's traceability data (`/test_result`) over HTTP, and publishes them to MQTT
+   alongside the Modbus-sourced process values, independent of this test sequence
 
 ---
 
@@ -179,6 +213,9 @@ print(f"Result code: {result.registers[0]}")
   noise floor, and comfortably within the instrument's accurately-measurable DC current band. This number may be off to a real UUT.
 - **Machine health/diagnostic data is intentionally out-of-band from this register map** —
   see the dedicated section above.
+- **Test traceability data (unit serial, job order, operator, fail reason) is intentionally
+  out-of-band from this register map, for the same reason as machine health** — see the
+  dedicated section above.
 - **Several register groups (Fall Time, Current Low Limit, Arc Current Limit, GFI, multi-step
   sequencing) are defined in the map but not yet implemented in the simulator.** They're kept
   in the document because they're real, documented Chroma features and may be implemented as

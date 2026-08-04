@@ -38,6 +38,7 @@ SLAVE_ID = 1
 lock = threading.Lock() 
 polling_period = 0.3 # time in ms | 0.2 would be 200ms
 current_stop_event = None  # module-level, tracks the ACTIVE test's Event
+latest_test_result_ref = {"value": None}  # shared with health_server's /test_result route
 
 
 
@@ -215,6 +216,15 @@ def reset_fault(tester:HiPotTester):
     print("INFO: HIPOT SIM - Fault Reset")
 
 
+def _store_test_result(result):
+    """HiPotTester's on_test_result hook -- stashes the full TestResult
+    (unit_serial, job_order_id, operator_id, fail_reason, etc.) so
+    health_server's /test_result route can serve it out-of-band, the
+    same way machine health is served out-of-band from Modbus."""
+    with lock:
+        latest_test_result_ref["value"] = result.to_dict()
+
+
 
 def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_registers, discrete_inputs, holding_registers):
     while True:
@@ -278,11 +288,11 @@ def coil_watcher(coils: ModbusSequentialDataBlock, tester: HiPotTester, input_re
 
 async def main():
     context, coils, discrete_inputs, input_registers, holding_registers  = build_context()
-    tester = HiPotTester(station_id="HIPOT-01")   # created ONCE, lives for the server's lifetime
+    tester = HiPotTester(station_id="HIPOT-01", on_test_result=_store_test_result)   # created ONCE, lives for the server's lifetime
 
     print(f"Hi-pot Modbus TCP server starting on {HOST}:{PORT} (slave id {SLAVE_ID})")
     # Create app instance for health band server
-    app = create_health_app(tester, lock)
+    app = create_health_app(tester, lock, latest_test_result_ref)
     # Start server procceses
     watcher_thread = threading.Thread(target=coil_watcher, args = (coils, tester, input_registers, discrete_inputs, holding_registers), daemon=True) # Watches for writes to registers
     watcher_thread.start()

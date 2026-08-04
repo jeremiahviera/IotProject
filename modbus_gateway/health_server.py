@@ -7,13 +7,15 @@ import urllib.request
 
 
 
-def create_health_app(machine,lock):
+def create_health_app(machine, lock, latest_test_result_ref=None):
     app = Flask(__name__)
+    if latest_test_result_ref is None:
+        latest_test_result_ref = {"value": None}
     # routes
     @app.route("/ping")
     def ping():
         return {"status": "ok"}
-    
+
     @app.route("/health")
     def health():
         try:
@@ -21,7 +23,19 @@ def create_health_app(machine,lock):
                 return machine.sample_health().to_dict()
         except Exception as e:
             return ({"error": "failed to read machine health", "detail": str(e)}, 500)
-    
+
+    @app.route("/test_result")
+    def test_result():
+        """Traceability data for the last completed test (unit_serial,
+        job_order_id, operator_id, fail_reason) -- out-of-band from
+        Modbus for the same reason machine health is, see the register
+        map's design notes."""
+        with lock:
+            result = latest_test_result_ref.get("value")
+        if result is None:
+            return ({"error": "no test has completed yet"}, 404)
+        return result
+
     return app
 
 

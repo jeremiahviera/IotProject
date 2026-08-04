@@ -7,6 +7,7 @@ from pysparkplug import Metric, DataType, get_current_timestamp, Device, EdgeNod
 
 MODBUS_SLAVE_ID = 1
 HEALTH_URL = "http://127.0.0.1:5021/health"
+TEST_RESULT_URL = "http://127.0.0.1:5021/test_result"
 GROUP_ID = "SmartFactorySim"
 EDGE_NODE_ID = "EdgeNode1"
 DEVICE_ID = "Device1"
@@ -135,6 +136,35 @@ def poll_health() -> list[Metric]:
     ]
     
 
+def poll_test_result() -> list[Metric]:
+    """Traceability data for the last completed test -- same out-of-band
+    HTTP channel as machine health, and for the same reason: Modbus has
+    no native string type, so unit_serial/job_order_id/operator_id/
+    fail_reason never went on the register map. Sourced from the last
+    completed TestResult, not a live Modbus register."""
+    ts = get_current_timestamp()
+    response = requests.get(TEST_RESULT_URL, timeout=2.0)
+    if response.status_code == 404:
+        # No test has completed yet (e.g. right at startup) -- report
+        # placeholders instead of failing the whole poll cycle.
+        data = {
+            "test_id": "",
+            "unit_serial": "",
+            "job_order_id": "",
+            "operator_id": "",
+            "fail_reason": None,
+        }
+    else:
+        data = response.json()
+
+    return [
+        Metric(timestamp=ts, name="Test/TestId", datatype=DataType.STRING, value=data["test_id"]),
+        Metric(timestamp=ts, name="Test/UnitSerial", datatype=DataType.STRING, value=data["unit_serial"]),
+        Metric(timestamp=ts, name="Test/JobOrderId", datatype=DataType.STRING, value=data["job_order_id"]),
+        Metric(timestamp=ts, name="Test/OperatorId", datatype=DataType.STRING, value=data["operator_id"]),
+        Metric(timestamp=ts, name="Test/FailReason", datatype=DataType.STRING, value=data["fail_reason"]),
+    ]
+
 def build_device(client) -> Device:
     """Birth off a real sample. Retries until both the Modbus server and
     health server are reachable, so a startup-ordering race (gateway
@@ -142,7 +172,7 @@ def build_device(client) -> Device:
     whole process."""
     while True:
         try:
-            metrics = poll_modbus(client) + poll_health()
+            metrics = poll_modbus(client) + poll_health() + poll_test_result()
             return Device(device_id=DEVICE_ID, metrics=metrics)
         except Exception as e:
             print(f"WARNING: Waiting for Modbus/health server to become reachable: {e}")
@@ -162,7 +192,7 @@ def main():
     try:
         while True:
             try:
-                metrics = poll_modbus(modbus_client) + poll_health()
+                metrics = poll_modbus(modbus_client) + poll_health() + poll_test_result()
                 edge_node.update_device(DEVICE_ID, metrics=metrics)
             except Exception as e:
                 print(f"WARNING: Error polling Modbus or Health: {e}")
