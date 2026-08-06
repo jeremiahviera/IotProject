@@ -1,13 +1,24 @@
 import struct
 import time
-
+import os
+from dotenv import load_dotenv
 import requests
 from pymodbus.client import ModbusTcpClient
-from pysparkplug import Metric, DataType, get_current_timestamp, Device, EdgeNode
+from pysparkplug import Metric, DataType, get_current_timestamp, Device, EdgeNode, Client, TLSConfig
 
+load_dotenv()
+
+# Machine data bands
 MODBUS_SLAVE_ID = 1
 HEALTH_URL = "http://127.0.0.1:5021/health"
 TEST_RESULT_URL = "http://127.0.0.1:5021/test_result"
+
+
+# Mqtt setup
+MQTT_HOST = os.environ["HIVEMQ_HOST"]
+MQTT_PORT = 8883
+MQTT_USERNAME = os.environ["HIVEMQ_USERNAME"]
+MQTT_PASSWORD = os.environ["HIVEMQ_PASSWORD"]
 GROUP_ID = "SmartFactorySim"
 EDGE_NODE_ID = "EdgeNode1"
 DEVICE_ID = "Device1"
@@ -181,13 +192,22 @@ def build_device(client) -> Device:
 def main():
     modbus_client = ModbusTcpClient("127.0.0.1", port=5020)
     modbus_client.connect()
+    
+    mqtt_client = Client(
+        client_id=EDGE_NODE_ID,
+        username= MQTT_USERNAME,
+        password=MQTT_PASSWORD,
+        transport_config=TLSConfig(),
+    )
 
     device = build_device(modbus_client)
 
-    edge_node = EdgeNode(group_id=GROUP_ID, edge_node_id=EDGE_NODE_ID, metrics=[])
+    edge_node = EdgeNode(group_id=GROUP_ID, edge_node_id=EDGE_NODE_ID, metrics=[], client=mqtt_client)
     edge_node.register(device)
-    edge_node.connect("127.0.0.1", port=1883, blocking=False)
+    print(f"Connecting to {MQTT_HOST}:{MQTT_PORT} ...")
 
+    edge_node.connect(MQTT_HOST, port=MQTT_PORT, blocking=False)
+    
     
     try:
         while True:

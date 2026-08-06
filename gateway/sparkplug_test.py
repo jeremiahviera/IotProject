@@ -1,13 +1,23 @@
 import time
-from pysparkplug import Device, EdgeNode, Metric, DataType, get_current_timestamp
+import os
+from pysparkplug import Device, EdgeNode, Metric, DataType, get_current_timestamp, Client, TLSConfig
+from dotenv import load_dotenv
 
-# Setup the MQTT broker connection parameters
+load_dotenv()
+'''
+# local mqtt host params
 BROKER_HOST = "localhost"
 BROKER_PORT = 1883
-
+'''
+MQTT_HOST = os.environ["HIVEMQ_HOST"]
+MQTT_PORT = 8883
+MQTT_USERNAME = os.environ["HIVEMQ_USERNAME"]
+MQTT_PASSWORD = os.environ["HIVEMQ_PASSWORD"]
 GROUP_ID = "SmartFactorySim"
 EDGE_NODE_ID = "EdgeNode1"
 DEVICE_ID = "Device1"
+
+              
 
 # Declare birth schema
 def build_device() -> Device:
@@ -27,14 +37,22 @@ def build_device() -> Device:
 
 # Wire edge node
 def main():
-    device = build_device()
-    edge_node = EdgeNode(group_id=GROUP_ID, edge_node_id=EDGE_NODE_ID, metrics=[])
-    edge_node.connect(BROKER_HOST, port = BROKER_PORT, blocking= False)
-    edge_node.register(device)
     
+    mqtt_client = Client(
+        client_id=EDGE_NODE_ID,
+        username=MQTT_USERNAME,
+        password=MQTT_PASSWORD,
+        transport_config=TLSConfig(),  # defaults trust the system CA store,
+    )                                  # which is enough for HiveMQ Cloud's public-CA certificate
+                          
+    device = build_device()
+    edge_node = EdgeNode(group_id=GROUP_ID, edge_node_id=EDGE_NODE_ID, metrics=[], client=mqtt_client)
+    edge_node.register(device)
+    edge_node.connect(MQTT_HOST, port = MQTT_PORT, blocking= False)
+
     # Connect to the MQTT broker and send the birth message
-    print(f"Connecting to {BROKER_HOST}:{BROKER_PORT} ...")
-    edge_node.connect(BROKER_HOST, port=BROKER_PORT, blocking=False)
+    print(f"Connecting to {MQTT_HOST}:{MQTT_PORT} ...")
+    edge_node.connect(MQTT_HOST, port=MQTT_PORT, blocking=False)
     time.sleep(3.0)  # give the connect callback a moment to fire NBIRTH/DBIRTH
 
     try:
