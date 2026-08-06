@@ -79,6 +79,7 @@ process down with it.
 | Modbus server not up yet when the gateway starts | `build_device()`'s initial connection attempt fails | Retries every `POLL_INTERVAL_S` until both Modbus and the health API are reachable, then births normally. Handles startup-ordering races (gateway started before its field device). |
 | Modbus server stops cleanly (process exits, TCP FIN) | pymodbus's `recv()` sees an empty read and clears its own socket | Self-heals with no gateway-side code needed — the next poll's `execute()` sees a cleared socket and reconnects on its own. |
 | Modbus connection drops **abruptly** (cable pull, crash, TCP RST) | `socket.send()` raises `OSError`/`BrokenPipeError`, which pymodbus does **not** catch or clear its socket for | Gateway catches `(ModbusException, OSError)` around `poll_modbus()` and explicitly calls `modbus_client.close()`, forcing a real reconnect attempt next cycle. Without this, pymodbus's sync client would keep "reconnecting" to a dead socket forever, since it only reconnects when its internal socket is `None`. |
+| Modbus server killed while a read is in flight | pymodbus doesn't always raise here -- an incomplete/aborted exchange can come back as an `ExceptionResponse` (or other error PDU) with no `.registers`/`.bits`, which would otherwise raise an unhandled `AttributeError` deep inside `read_float()`, crashing the process. Confirmed by actually killing the Modbus server mid-run. | Every raw pymodbus call result is passed through a `_checked()` helper that calls `result.isError()` and raises `ModbusIOException` (a `ModbusException` subclass) before any `.registers`/`.bits` access. Falls into the same catch/reconnect path as the abrupt-drop case above. |
 | Health/test-result HTTP API unreachable | `requests.exceptions.RequestException` (connection refused, timeout) | Caught independently of Modbus polling. Each `requests.get()` opens a fresh connection per call, so there's no persistent connection state to repair — it just succeeds again once the API is back. |
 | One data source down, the other up | — | Modbus and HTTP polling are collected into `metrics` independently; a dead health API doesn't block live voltage/current from publishing, and vice versa. Only skips the publish entirely if **both** sources failed that cycle. |
 | MQTT connection to HiveMQ Cloud drops | paho's own network loop (`loop_start()`, running in a background thread) | Reconnects automatically — `pysparkplug.Client` defaults to `reconnect_on_failure=True` with exponential backoff (1s–120s). No gateway code needed. |
@@ -94,10 +95,6 @@ process down with it.
   means unlimited), so publishes queue up in memory rather than being dropped — but there's no
   persistent (on-disk) buffering. A long enough outage grows memory usage rather than losing
   data quietly; a genuinely long outage would still need attention.
-- **No Modbus exception-response handling.** `poll_modbus()` doesn't check
-  `result.isError()` on a returned `ExceptionResponse` (e.g. illegal address) — not implemented
-  because the register map is static and this class of error shouldn't occur against the
-  current server. Would need adding if the register map becomes dynamic/configurable.
 
 ---
 

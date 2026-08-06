@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 import requests
 from pymodbus.client import ModbusTcpClient
-from pymodbus.exceptions import ModbusException
+from pymodbus.exceptions import ModbusException, ModbusIOException
 from pysparkplug import Metric, DataType, get_current_timestamp, Device, EdgeNode, Client, TLSConfig
 
 load_dotenv()
@@ -27,21 +27,31 @@ POLL_INTERVAL_S = 2.0  # seconds
 
 
 
+def _checked(result):
+    """pymodbus doesn't always raise on failure -- a dropped/killed server
+    can come back as an ExceptionResponse (or other error PDU) with no
+    .registers/.bits, which would otherwise blow up as an AttributeError
+    deep in the caller. Normalize that into a ModbusException so the
+    reconnect handling in main()'s poll loop catches it."""
+    if result.isError():
+        raise ModbusIOException(str(result))
+    return result
+
 def read_float(client, address, slave=MODBUS_SLAVE_ID):
     """Two consecutive input registers, big-endian -- reverses the
     struct.pack('>f', ...) your server does when writing them."""
-    result = client.read_input_registers(address=address, count=2, slave=slave)
+    result = _checked(client.read_input_registers(address=address, count=2, slave=slave))
     return struct.unpack(">f", struct.pack(">HH", *result.registers))[0]
 
 def poll_modbus(client) -> list[Metric]:
     ts = get_current_timestamp()
-    
+
     voltage = read_float(client, address=0)
     current = read_float(client, address=2)
-    elapsed_raw = client.read_input_registers(address=4, count=1, slave=MODBUS_SLAVE_ID).registers[0]  # 30005
-    result_code = client.read_input_registers(address=6, count=1, slave=MODBUS_SLAVE_ID).registers[0]  # 30007
+    elapsed_raw = _checked(client.read_input_registers(address=4, count=1, slave=MODBUS_SLAVE_ID)).registers[0]  # 30005
+    result_code = _checked(client.read_input_registers(address=6, count=1, slave=MODBUS_SLAVE_ID)).registers[0]  # 30007
 
-    discrete = client.read_discrete_inputs(address=0, count=8, slave=MODBUS_SLAVE_ID).bits
+    discrete = _checked(client.read_discrete_inputs(address=0, count=8, slave=MODBUS_SLAVE_ID)).bits
     last_test_pass = discrete[0] # 10001
     last_test_fail = discrete[1] # 10002
     under_test = discrete[2] # 10003
