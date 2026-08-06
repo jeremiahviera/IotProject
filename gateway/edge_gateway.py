@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 import requests
 from pymodbus.client import ModbusTcpClient
+from pymodbus.exceptions import ModbusException
 from pysparkplug import Metric, DataType, get_current_timestamp, Device, EdgeNode, Client, TLSConfig
 
 load_dotenv()
@@ -211,11 +212,26 @@ def main():
     
     try:
         while True:
+            metrics = []
+
             try:
-                metrics = poll_modbus(modbus_client) + poll_health() + poll_test_result()
+                metrics += poll_modbus(modbus_client)
+            except (ModbusException, OSError) as e:
+                # A hard-broken socket (cable pull, crash, RST) doesn't
+                # always get cleared by pymodbus itself -- force a real
+                # reconnect attempt on the next cycle instead of retrying
+                # forever on a dead socket.
+                print(f"WARNING: Modbus read failed, will reconnect next cycle: {e}")
+                modbus_client.close()
+
+            try:
+                metrics += poll_health() + poll_test_result()
+            except requests.exceptions.RequestException as e:
+                print(f"WARNING: Health/test-result API unreachable: {e}")
+
+            if metrics:
                 edge_node.update_device(DEVICE_ID, metrics=metrics)
-            except Exception as e:
-                print(f"WARNING: Error polling Modbus or Health: {e}")
+
             time.sleep(POLL_INTERVAL_S)
     except KeyboardInterrupt:
         print("Shutting down cleanly...")

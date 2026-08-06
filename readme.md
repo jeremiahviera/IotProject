@@ -9,7 +9,7 @@ automation, not a generic CRUD or IoT demo.
 | Level | Layer | Status |
 |---|---|---|
 | 0/1 | Simulated machines (Python), each acting as a Modbus TCP field device | In progress -- hi-pot tester complete |
-| 2 | Edge gateway: polls Modbus, translates to MQTT (Sparkplug B) | Not started |
+| 2 | Edge gateway: polls Modbus, translates to MQTT (Sparkplug B) | Complete -- publishes to HiveMQ Cloud |
 | 3 | TimescaleDB ingestion + REST API (Node.js/Express) | Not started |
 | 4 | React dashboard: OEE, alarms, predictive maintenance | Not started |
 
@@ -28,6 +28,18 @@ the Chroma 19071/19072/19073 instrument family, served over Modbus TCP.
 
 Full register map, UUT rationale, and design notes: [`docs/hipot_register_map.md`](docs/hipot_register_map.md).
 Coil command state machine: [`docs/hipot_coil_state_machine.png`](docs/hipot_coil_state_machine.png).
+
+### Current status: Edge Gateway (Phase 2)
+
+`gateway/edge_gateway.py` polls the hi-pot tester's Modbus registers and its out-of-band
+health/test-result HTTP endpoints, unifies both into Sparkplug B, and publishes to a HiveMQ
+Cloud broker over TLS. Built to keep running through the failures a field gateway actually
+sees -- a Modbus server that isn't up yet, drops cleanly, or drops abruptly; a flaky health
+API; an MQTT broker connection blip -- each handled independently rather than one failure
+taking the whole gateway down.
+
+Full HiveMQ Cloud setup, topic namespace, and the failure-handling table (what's detected, how,
+and what happens): [`docs/edge_gateway.md`](docs/edge_gateway.md).
 
 ### UUT test parameters
 | Parameter | New (480V switchboard section) | Why |
@@ -53,4 +65,13 @@ python -m modbus_gateway.hipot_modbus_server
 
 # in a second terminal:
 python modbus_gateway/hipot_modbus_smoke.py
+```
+
+To also run the edge gateway (publishes to HiveMQ Cloud -- see
+[`docs/edge_gateway.md`](docs/edge_gateway.md) for cluster setup and `.env` values needed
+first):
+
+```
+# in a third terminal:
+python -m gateway.edge_gateway
 ```
