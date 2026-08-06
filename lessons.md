@@ -21,3 +21,8 @@ hipot sim has 2 channels. one for reporting testing over modbus, and another to 
 one state that will be reported on both will be the machine state, idle, running etc and faults. this must be exposed to modbus for machine functionality.
 
 using flask application factory in health server, instead of a health server class was a bit confusing, but a class would be more work for something that a function can do. sticking with flask conventions.
+
+
+- When the modbus server goes down while the edge gateway is listening, and the modbus server goes back up, add text to show that the reconnection has been established.
+- ensure the edge gateway can handle the health band not showing up either
+- ensure the edge gateway can handle network errors
